@@ -16,13 +16,14 @@ from opts import parser
 
 best_prec1 = 0
 
+os.environ["CUDA_VISIBLE_DEVICES"]="2,3"
 
 def main():
     global args, best_prec1
     args = parser.parse_args()
 
     if args.dataset == 'ucf101':
-        num_class = 101
+        num_class = 14
     elif args.dataset == 'hmdb51':
         num_class = 51
     elif args.dataset == 'kinetics':
@@ -108,10 +109,9 @@ def main():
         print(('group: {} has {} params, lr_mult: {}, decay_mult: {}'.format(
             group['name'], len(group['params']), group['lr_mult'], group['decay_mult'])))
 
-    optimizer = torch.optim.SGD(policies,
-                                args.lr,
-                                momentum=args.momentum,
-                                weight_decay=args.weight_decay)
+    #optimizer = torch.optim.SGD(policies, args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
+
+    optimizer = torch.optim.Adam(policies, lr=args.lr, weight_decay=args.weight_decay)
 
     if args.evaluate:
         validate(val_loader, model, criterion, 0)
@@ -245,11 +245,12 @@ def validate(val_loader, model, criterion, iter, logger=None):
     return top1.avg
 
 
-def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
-    filename = '_'.join((args.snapshot_pref, args.modality.lower(), filename))
+def save_checkpoint(state, is_best, filename='checkpoint.pth'):
+    filename = '_'.join((args.snapshot_pref, filename))
     torch.save(state, filename)
     if is_best:
-        best_name = '_'.join((args.snapshot_pref, args.modality.lower(), 'model_best.pth.tar'))
+        best_name = '_'.join((args.snapshot_pref, 'best.pth'))
+        #best_name = '_'.join((args.snapshot_pref, args.modality.lower(), '_best.pth'))
         shutil.copyfile(filename, best_name)
 
 

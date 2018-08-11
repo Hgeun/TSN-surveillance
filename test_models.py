@@ -2,6 +2,8 @@ import argparse
 import time
 
 import numpy as np
+#import matplotlib.pyplot as plt
+
 import torch.nn.parallel
 import torch.optim
 from sklearn.metrics import confusion_matrix
@@ -9,8 +11,13 @@ from sklearn.metrics import confusion_matrix
 from dataset import TSNDataSet
 from models import TSN
 from transforms import *
+
+import os
 from ops import ConsensusModule
 
+from sklearn.model_selection import train_test_split
+
+os.environ["CUDA_VISIBLE_DEVICES"]="3"
 # options
 parser = argparse.ArgumentParser(
     description="Standard video-level testing")
@@ -18,17 +25,17 @@ parser.add_argument('dataset', type=str, choices=['ucf101', 'hmdb51', 'kinetics'
 parser.add_argument('modality', type=str, choices=['RGB', 'Flow', 'RGBDiff'])
 parser.add_argument('test_list', type=str)
 parser.add_argument('weights', type=str)
-parser.add_argument('--arch', type=str, default="resnet101")
+parser.add_argument('--arch', type=str, default="BNInception")
 parser.add_argument('--save_scores', type=str, default=None)
-parser.add_argument('--test_segments', type=int, default=25)
+parser.add_argument('--test_segments', type=int, default=1)
 parser.add_argument('--max_num', type=int, default=-1)
-parser.add_argument('--test_crops', type=int, default=10)
+parser.add_argument('--test_crops', type=int, default=1)
 parser.add_argument('--input_size', type=int, default=224)
 parser.add_argument('--crop_fusion_type', type=str, default='avg',
                     choices=['avg', 'max', 'topk'])
 parser.add_argument('--k', type=int, default=3)
-parser.add_argument('--dropout', type=float, default=0.7)
-parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
+parser.add_argument('--dropout', type=float, default=0.5)
+parser.add_argument('-j', '--workers', default=1, type=int, metavar='N',
                     help='number of data loading workers (default: 4)')
 parser.add_argument('--gpus', nargs='+', type=int, default=None)
 parser.add_argument('--flow_prefix', type=str, default='')
@@ -37,7 +44,7 @@ args = parser.parse_args()
 
 
 if args.dataset == 'ucf101':
-    num_class = 101
+    num_class = 14
 elif args.dataset == 'hmdb51':
     num_class = 51
 elif args.dataset == 'kinetics':
@@ -75,13 +82,14 @@ data_loader = torch.utils.data.DataLoader(
                    image_tmpl="img_{:05d}.jpg" if args.modality in ['RGB', 'RGBDiff'] else args.flow_prefix+"{}_{:05d}.jpg",
                    test_mode=True,
                    transform=torchvision.transforms.Compose([
-                       cropping,
+                       GroupScale(net.scale_size),
+                       GroupCenterCrop(net.input_size),
                        Stack(roll=args.arch == 'BNInception'),
                        ToTorchFormatTensor(div=args.arch != 'BNInception'),
                        GroupNormalize(net.input_mean, net.input_std),
                    ])),
         batch_size=1, shuffle=False,
-        num_workers=args.workers * 2, pin_memory=True)
+        num_workers=args.workers, pin_memory=True)
 
 if args.gpus is not None:
     devices = [args.gpus[i] for i in range(args.workers)]
@@ -110,13 +118,17 @@ def eval_video(video_data):
         length = 18
     else:
         raise ValueError("Unknown modality "+args.modality)
+    input_= data.view(-1, length, data.size(2), data.size(3))
+    input_var = torch.autograd.Variable(input_, volatile=True)
 
-    input_var = torch.autograd.Variable(data.view(-1, length, data.size(2), data.size(3)),
-                                        volatile=True)
-    rst = net(input_var).data.cpu().numpy().copy()
-    return i, rst.reshape((num_crop, args.test_segments, num_class)).mean(axis=0).reshape(
-        (args.test_segments, 1, num_class)
-    ), label[0]
+
+    rst = net(input_var).data.cpu().numpy().copy() #a
+
+    resh = rst.reshape((num_crop, args.test_segments, num_class)).mean(axis=0).reshape(
+        (args.test_segments, 1, num_class)   )
+
+
+    return i, resh, label[0]
 
 
 proc_start_time = time.time()
@@ -146,23 +158,33 @@ cls_acc = cls_hit / cls_cnt
 
 print(cls_acc)
 
+#cmap = plt.cf.Blues
+#plt.imshow(cf, interpolation='nearest', cmap=cmap)
+
 print('Accuracy {:.02f}%'.format(np.mean(cls_acc) * 100))
 
 if args.save_scores is not None:
+    np.savez(args.save_scores, scores=output, labels=video_labels, predictions=video_pred)
 
+'''
     # reorder before saving
     name_list = [x.strip().split()[0] for x in open(args.test_list)]
 
-    order_dict = {e:i for i, e in enumerate(sorted(name_list))}
+    order_dict = {e:i for i, e in enumerate(name_list)}
 
     reorder_output = [None] * len(output)
     reorder_label = [None] * len(output)
+    reorder_pred = [None] * len(output)
+    idx = [None] * len(output)
 
     for i in range(len(output)):
-        idx = order_dict[name_list[i]]
-        reorder_output[idx] = output[i]
-        reorder_label[idx] = video_labels[i]
+        idx_ = order_dict[name_list[i]]
+        reorder_output[idx_] = output[i]
+        reorder_label[idx_] = video_labels[i]
+        reorder_pred[idx_] = video_pred[i]
+        idx[idx_] = name_list[i]
 
-    np.savez(args.save_scores, scores=reorder_output, labels=reorder_label)
+    np.savez(args.save_scores, scores=reorder_output, labels=reorder_label, predictions=reorder_pred, index = idx, cf=cf)
+'''
 
 
